@@ -276,9 +276,7 @@ def run_vgg16_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.Pat
     print("✓ VGG-16: Saliency overlays →", saldir)
 
 
-# -----------------------
 # VGG-Face
-# -----------------------
 def load_vggface(model_path: pathlib.Path, img_size: int, device: torch.device):
     """Load VGG-Face (Vgg_face_dag) and centering mean image from model.meta['mean']."""
     from vgg_face_dag import Vgg_face_dag
@@ -446,7 +444,7 @@ def gradcam_one_vit(model, target_layer, reshape_transform, img_path, out_dir, t
     Image.fromarray(overlay).save(out_path)
 
 
-def compute_vit_metrics(
+def compute_dataset_metrics_vit_from_lists(
     feats_fn,
     model,
     transform,
@@ -526,7 +524,7 @@ def run_vit_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.Path]
                     except Exception as e:
                         print(f"[CAM:{name}/{cls}] {fp.name}: {e}")
 
-        metrics[name] = compute_vit_metrics(
+        metrics[name] = compute_dataset_metrics_vit_from_lists(
             feats_fn, model, transform, name, folders, device, amp=args.amp
         )
 
