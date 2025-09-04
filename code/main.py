@@ -186,7 +186,7 @@ def compute_dataset_metrics_cnn_from_lists(
     return {"PR_mean": PR.mean(0), "CD": CD, "N_LAY": N_LAY}
 
 
-def gradcam_one_cnn(model, target_layer, img_path, out_dir, AVG, img_size, device, tag: str):
+def gradcam_one_cnn(model, target_layer, img_path, out_dir, AVG, img_size, device, tag: str, flip_lr: bool = False):
     """Generate and save a Grad-CAM overlay as '<tag>.png' in out_dir (CNN)."""
     cam = GradCAM(model, target_layer)
     x, rgb = preprocess_cv(img_path, img_size, AVG, device)
@@ -195,12 +195,11 @@ def gradcam_one_cnn(model, target_layer, img_path, out_dir, AVG, img_size, devic
     out_dir.mkdir(parents=True, exist_ok=True)
     op = out_dir / f"{tag}.png"
     im = (overlay.permute(1, 2, 0).detach().cpu().numpy() * 255).astype(np.uint8)
+    if flip_lr:
+        im = np.ascontiguousarray(im[:, ::-1, :])
     cv2.imwrite(str(op), cv2.cvtColor(im, cv2.COLOR_RGB2BGR))
 
-
-# -----------------------
 # VGG-16
-# -----------------------
 def load_vgg16(model_path: pathlib.Path, img_size: int, device: torch.device):
     """Load custom VGG-16 and centering mean image (zeros if 'average' missing)."""
     ckpt = torch.load(model_path, map_location="cpu")
@@ -262,7 +261,8 @@ def run_vgg16_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.Pat
                 for i, fp in enumerate(files):
                     tag = tag_base if args.cam_per_class == 1 else f"{tag_base}_{i+1}"
                     try:
-                        gradcam_one_cnn(model, target_layer, fp, saldir, AVG, args.img_size, device, tag)
+                        flip = (name == "NonSemantic" and cls == "inverted_thatcher")
+                        gradcam_one_cnn(model, target_layer, fp, saldir, AVG, args.img_size, device, tag, flip_lr=flip)
                     except Exception as e:
                         print(f"[CAM:{name}/{cls}] {fp.name}: {e}")
 
@@ -368,7 +368,8 @@ def run_vggface_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.P
                 for i, fp in enumerate(files):
                     tag = tag_base if args.cam_per_class == 1 else f"{tag_base}_{i+1}"
                     try:
-                        gradcam_one_cnn(model, target_layer, fp, saldir, AVG, args.img_size, device, tag)
+                        flip = (name == "NonSemantic" and cls == "inverted_thatcher")
+                        gradcam_one_cnn(model, target_layer, fp, saldir, AVG, args.img_size, device, tag, flip_lr=flip)
                     except Exception as e:
                         print(f"[CAM:{name}/{cls}] {fp.name}: {e}")
 
@@ -432,13 +433,15 @@ def preprocess_vit(path: pathlib.Path, transform: T.Compose, device: torch.devic
     return tensor, rgb
 
 
-def gradcam_one_vit(model, target_layer, reshape_transform, img_path, out_dir, transform, device, tag: str):
+def gradcam_one_vit(model, target_layer, reshape_transform, img_path, out_dir, transform, device, tag: str, flip_lr: bool = False):
     """Generate and save a grad-cam overlay for ViT as '<tag>.png' in out_dir."""
     cam = ViTGradCAM(model=model, target_layers=[target_layer], reshape_transform=reshape_transform)
     tensor, rgb_img = preprocess_vit(img_path, transform, device)
     targets = [ClassifierOutputTarget(0)]  # mirrors existing behavior
     cam_map = cam(input_tensor=tensor, targets=targets)[0]
     overlay = show_cam_on_image(rgb_img, cam_map, use_rgb=True, colormap=cv2.COLORMAP_JET)
+    if flip_lr:
+        overlay = np.ascontiguousarray(overlay[:, ::-1, :])
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{tag}.png"
     Image.fromarray(overlay).save(out_path)
@@ -520,7 +523,8 @@ def run_vit_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.Path]
                 for i, fp in enumerate(files):
                     tag = tag_base if args.cam_per_class == 1 else f"{tag_base}_{i+1}"
                     try:
-                        gradcam_one_vit(model, target_layer, reshape_transform, fp, saldir, transform, device, tag)
+                        flip = (name == "NonSemantic" and cls == "inverted_thatcher")
+                        gradcam_one_vit(model, target_layer, reshape_transform, fp, saldir, transform, device, tag, flip_lr=flip)
                     except Exception as e:
                         print(f"[CAM:{name}/{cls}] {fp.name}: {e}")
 
@@ -534,9 +538,7 @@ def run_vit_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.Path]
     print("✓ ViT: Saliency overlays →", saldir)
 
 
-# ======================================================================
 # ViT-Face
-# ======================================================================
 def load_vitface(model_path: pathlib.Path, device: torch.device):
     """Load ViT-Face model (vit_face.ViT_face) and return in eval mode."""
     from vit_face import ViT_face
@@ -616,7 +618,7 @@ class _ViTFaceFeatHook:
 
 def vitface_single_heatmap(
     model, img_path: pathlib.Path, out_path: pathlib.Path,
-    size: int = 112, head_reduce: str = "mean", layer_mode: str = "dynamic"
+    size: int = 112, head_reduce: str = "mean", layer_mode: str = "dynamic", flip_lr: bool = False
 ):
     """Produce ONE attention-based heatmap for ViT-Face and save to out_path."""
     img_pil = Image.open(img_path).convert('RGB').resize((size, size))
@@ -657,6 +659,8 @@ def vitface_single_heatmap(
     hm_u8 = (cm(hm) * 255).astype(np.uint8)
     fg = Image.fromarray(hm_u8).convert('RGBA')
     out_img = Image.blend(img_pil.convert('RGBA'), fg, alpha=0.5).convert("RGB")
+    if flip_lr:
+        out_img = out_img.transpose(Image.FLIP_LEFT_RIGHT)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_img.save(out_path)
 
@@ -732,8 +736,9 @@ def run_vitface_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.P
                 for i, fp in enumerate(files):
                     tag = tag_base if args.cam_per_class == 1 else f"{tag_base}_{i+1}"
                     try:
+                        flip = (name == "NonSemantic" and cls == "inverted_thatcher")
                         vitface_single_heatmap(model, fp, saldir / f"{tag}.png",
-                                               size=size, head_reduce="mean", layer_mode="dynamic")
+                                               size=size, head_reduce="mean", layer_mode="dynamic", flip_lr=flip)
                     except Exception as e:
                         print(f"[CAM:{name}/{cls}] {fp.name}: {e}")
 
@@ -747,9 +752,8 @@ def run_vitface_pipeline(args, folders_by_ds: Dict[str, Dict[str, List[pathlib.P
     print("✓ ViT-Face: Saliency overlays →", saldir)
 
 
-# -----------------------
+
 # CLI
-# -----------------------
 def main():
     p = argparse.ArgumentParser(description="Thatcher/NSLM analysis (new data layout) with VGG-16, VGG-Face, ViT, and ViT-Face")
     p.add_argument("--model", choices=["vgg16", "vggface", "vit", "vitface", "run-all"], required=True,
